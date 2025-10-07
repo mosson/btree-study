@@ -27,11 +27,69 @@ where
 
         self.root.insert(value);
     }
+
+    pub fn iter(&self) -> BTreeIterator<T, D> {
+        BTreeIterator::new(self)
+    }
+}
+
+#[derive(Debug)]
+pub struct BTreeIterator<'a, T, const D: usize>
+where
+    T: Ord + std::fmt::Debug,
+{
+    stack: Vec<(usize, &'a Node<T, D>)>,
+}
+
+impl<'a, T, const D: usize> BTreeIterator<'a, T, D>
+where
+    T: Ord + std::fmt::Debug,
+{
+    pub fn new(source: &'a BTree<T, D>) -> Self {
+        let mut iter = BTreeIterator { stack: vec![] };
+        iter.stacking(&source.root);
+        iter
+    }
+
+    fn stacking(&mut self, node: &'a Node<T, D>) {
+        self.stack.push((0, node));
+
+        if let Some(first_child) = node.children.first() {
+            self.stacking(first_child);
+        }
+    }
+}
+
+impl<'a, T, const D: usize> Iterator for BTreeIterator<'a, T, D>
+where
+    T: Ord + std::fmt::Debug,
+{
+    type Item = &'a T;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        loop {
+            if let Some((i, node)) = self.stack.pop() {
+                if i < node.keys.len() {
+                    let value = &node.keys[i];
+
+                    self.stack.push((i + 1, node));
+
+                    if !node.is_leaf() {
+                        self.stacking(&node.children[i + 1]);
+                    }
+
+                    return Some(value);
+                }
+            } else {
+                break None;
+            }
+        }
+    }
 }
 
 #[derive(Debug)]
 #[allow(dead_code)]
-struct Node<T, const D: usize>
+pub struct Node<T, const D: usize>
 where
     T: Ord + std::fmt::Debug,
 {
@@ -110,9 +168,35 @@ mod tests {
     fn test_simple_insert() {
         let mut btree = BTree::<_, 2>::new();
         println!("{:#?}", btree);
+        for i in 1..=9 {
+            btree.insert(i);
+        }
+        println!("{:#?}", btree);
+        println!(
+            "value is {:?}",
+            btree.iter().map(|i| *i).collect::<Vec<_>>()
+        );
+
+        let mut btree = BTree::<_, 3>::new();
+        println!("{:#?}", btree);
         for i in 1..=20 {
             btree.insert(i);
         }
         println!("{:#?}", btree);
+        println!(
+            "value is {:?}",
+            btree.iter().map(|i| *i).collect::<Vec<_>>()
+        );
+
+        let mut btree = BTree::<_, 5>::new();
+        println!("{:#?}", btree);
+        for i in 1..=50 {
+            btree.insert(i);
+        }
+        println!("{:#?}", btree);
+        println!(
+            "value is {:?}",
+            btree.iter().map(|i| *i).collect::<Vec<_>>()
+        );
     }
 }
