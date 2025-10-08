@@ -31,6 +31,64 @@ where
     pub fn iter(&self) -> BTreeIterator<T, D> {
         BTreeIterator::new(self)
     }
+
+    pub fn delete(&mut self, value: &T) {
+        match self.find_parent_and_index(value) {
+            None => todo!("根の削除処理"),
+            Some((parent, index)) => {
+                let is_delete = {
+                    parent
+                        .children
+                        .get(index)
+                        .expect("削除対象のキーを含むノードが取得できません")
+                        .is_delete()
+                };
+
+                if !is_delete {
+                    if index == parent.keys.len() {
+                        parent.pivot_right(index - 1);
+                    } else {
+                        parent.pivot_left(index);
+                    }
+
+                    return self.delete(value);
+                }
+
+                let target = parent.children.get_mut(index).unwrap();
+                target.delete_key(value);
+
+                if !target.is_leaf() {
+                    todo!("内部ノードの処理")
+                }
+            }
+        }
+    }
+
+    fn find_parent_and_index(&mut self, value: &T) -> Option<(&mut Node<T, D>, usize)> {
+        match self.root.keys.as_slice().binary_search(value) {
+            Ok(_) => todo!("根に対象値が記録されている"),
+            Err(i) => {
+                let hit = match self.root.children.get(i) {
+                    Some(child) => match child.keys.as_slice().binary_search(value) {
+                        Ok(_) => Some(true),
+                        Err(_) => Some(false),
+                    },
+                    None => None,
+                };
+
+                match hit {
+                    Some(true) => Some((&mut self.root, i)),
+                    Some(false) => self
+                        .root
+                        .children
+                        .get_mut(i)
+                        .unwrap()
+                        .find_parent_and_index(value),
+                    None => None,
+                }
+            }
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -87,7 +145,7 @@ where
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 #[allow(dead_code)]
 pub struct Node<T, const D: usize>
 where
@@ -151,12 +209,125 @@ where
         self.children.insert(index + 1, right);
     }
 
+    fn find_parent_and_index(&mut self, value: &T) -> Option<(&mut Node<T, D>, usize)> {
+        match self.keys.as_slice().binary_search(value) {
+            Ok(_) => unreachable!("根の検査でここには到達しない"),
+            Err(i) => {
+                let hit = match self.children.get(i) {
+                    Some(child) => match child.keys.as_slice().binary_search(value) {
+                        Ok(_) => Some(true),
+                        Err(_) => Some(false),
+                    },
+                    None => None,
+                };
+
+                match hit {
+                    Some(true) => Some((self, i)),
+                    Some(false) => self
+                        .children
+                        .get_mut(i)
+                        .unwrap()
+                        .find_parent_and_index(value),
+                    None => None,
+                }
+            }
+        }
+    }
+
+    fn pivot_left(&mut self, index: usize) {
+        println!("pivot_left: {:?}, index: {:?}", self, index);
+        let value = self
+            .keys
+            .get_mut(index)
+            .expect("親ノードの値が取得できません");
+        let (left_nodes, right_nodes) = self.children.split_at_mut(index + 1);
+        let left_node = left_nodes.last_mut().expect("左ノードが取得できません");
+        let right_node = right_nodes.first_mut().expect("右ノードが取得できません");
+
+        if right_node.keys.len() < D {
+            return self.merge_right(index);
+        }
+
+        let right_value = right_node.keys.remove(0);
+        let pivot_key = std::mem::replace(value, right_value);
+        left_node.keys.push(pivot_key);
+    }
+
+    fn merge_right(&mut self, index: usize) {
+        let mut right_node = self.children.remove(index + 1);
+        let mut left_node = self.children.remove(index);
+
+        let mut new_right_keys = vec![self.keys.remove(index)];
+        let left_keys = std::mem::take(&mut left_node.keys);
+        new_right_keys.extend(left_keys);
+        let rest = std::mem::replace(&mut right_node.keys, new_right_keys);
+        right_node.keys.extend(rest);
+
+        let new_right_children = left_node.children;
+        let rest_children = std::mem::replace(&mut right_node.children, new_right_children);
+        right_node.children.extend(rest_children);
+
+        if self.keys.is_empty() {
+            std::mem::swap(self, &mut right_node);
+        } else {
+            self.children.insert(index, right_node);
+        }
+    }
+
+    fn pivot_right(&mut self, index: usize) {
+        let (left_nodes, right_nodes) = self.children.split_at_mut(index + 1);
+        let left_node = left_nodes.last_mut().expect("左ノードが取得できません");
+        let right_node = right_nodes.first_mut().expect("右ノードが取得できません");
+
+        if left_node.keys.len() < D {
+            return self.merge_left(index);
+        }
+
+        let value = self
+            .keys
+            .get_mut(index)
+            .expect("親ノードの値が取得できません");
+
+        let left_value = left_node.keys.remove(left_node.keys.len() - 1);
+        let pivot_key = std::mem::replace(value, left_value);
+        right_node.keys.insert(0, pivot_key);
+    }
+
+    fn merge_left(&mut self, index: usize) {
+        let mut right_node = self.children.remove(index + 1);
+        let mut left_node = self.children.remove(index);
+        let value = self.keys.remove(index);
+        left_node.keys.push(value);
+        let right_keys = std::mem::take(&mut right_node.keys);
+        left_node.keys.extend(right_keys);
+        left_node.children.extend(right_node.children);
+
+        if self.keys.is_empty() {
+            std::mem::swap(self, &mut left_node);
+        } else {
+            self.children.insert(index, left_node);
+        }
+    }
+
     fn is_full(&self) -> bool {
         self.keys.len() >= D * 2 - 1
     }
 
     fn is_leaf(&self) -> bool {
         self.children.is_empty()
+    }
+
+    fn is_delete(&self) -> bool {
+        self.keys.len() >= D
+    }
+
+    fn delete_key(&mut self, value: &T) {
+        match self.keys.as_slice().binary_search(value) {
+            Ok(i) => {
+                self.keys.remove(i);
+            }
+            _ => {} // noop
+        };
     }
 }
 
@@ -198,5 +369,65 @@ mod tests {
             "value is {:?}",
             btree.iter().map(|i| *i).collect::<Vec<_>>()
         );
+    }
+
+    #[rstest::rstest]
+    #[case(1, Some(0))]
+    #[case(2, Some(0))]
+    #[should_panic(expected = "根に対象値が記録されている")]
+    #[case(3, None)]
+    #[case(4, None)]
+    #[case(5, Some(1))]
+    #[should_panic(expected = "根に対象値が記録されている")]
+    #[case(6, None)]
+    #[case(7, Some(2))]
+    #[should_panic(expected = "根に対象値が記録されている")]
+    #[case(8, None)]
+    #[case(9, Some(3))]
+    fn test_find_parent_and_index(#[case] search_value: i32, #[case] index: Option<usize>) {
+        let mut btree: BTree<i32, 2> = BTree::new();
+        //        [3, 6, 8]
+        // [1,2] | [5] | [7] | [9]
+        for i in [1, 2, 3, 5, 6, 7, 8, 9].into_iter().rev() {
+            btree.insert(i);
+        }
+
+        let search_result = btree.find_parent_and_index(&search_value);
+        if index.is_some() {
+            assert!(search_result.is_some());
+            let search_result = search_result.unwrap();
+            assert_eq!(search_result.0.keys, vec![3, 6, 8]);
+            assert_eq!(search_result.1, index.unwrap());
+        } else {
+            assert!(search_result.is_none());
+        }
+    }
+
+    #[test]
+    fn test_delete_leaf_node() {
+        let mut btree: BTree<i32, 2> = BTree::new();
+        //        [3, 6, 8]
+        // [1,2] | [5] | [7] | [9]
+        for i in [1, 2, 3, 5, 6, 7, 8, 9].into_iter().rev() {
+            btree.insert(i);
+        }
+
+        println!("{:#?}", btree);
+        btree.delete(&1);
+        println!("{:#?}", btree);
+        //        [3, 6, 8]
+        // [2] | [5] | [7] | [9]
+        btree.delete(&2);
+        println!("{:#?}", btree);
+        //        [6, 8]
+        // [3, 5] | [7] | [9]
+        btree.delete(&9);
+        println!("{:#?}", btree);
+        btree.delete(&5);
+        println!("{:#?}", btree);
+        btree.delete(&8);
+        println!("{:#?}", btree);
+        btree.delete(&7);
+        println!("{:#?}", btree);
     }
 }
