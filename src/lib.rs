@@ -32,19 +32,16 @@ where
         BTreeIterator::new(self)
     }
 
-    pub fn delete(&mut self, value: &T) {
+    pub fn delete(&mut self, value: &T) -> Result<(), Box<dyn std::error::Error>> {
         match self.find_parent_and_index(value) {
-            None => todo!("根の削除処理"),
+            None => self.root.delete_intermediate(value),
             Some((parent, index)) => {
-                let is_delete = {
-                    parent
-                        .children
-                        .get(index)
-                        .expect("削除対象のキーを含むノードが取得できません")
-                        .is_delete()
-                };
+                let target = parent.children.get(index).unwrap();
+                if !target.is_leaf() {
+                    return self.root.delete_intermediate(value);
+                }
 
-                if !is_delete {
+                if !parent.is_delete_child(index) {
                     if index == parent.keys.len() {
                         parent.pivot_right(index - 1);
                     } else {
@@ -57,16 +54,14 @@ where
                 let target = parent.children.get_mut(index).unwrap();
                 target.delete_key(value);
 
-                if !target.is_leaf() {
-                    todo!("内部ノードの処理")
-                }
+                Ok(())
             }
         }
     }
 
     fn find_parent_and_index(&mut self, value: &T) -> Option<(&mut Node<T, D>, usize)> {
         match self.root.keys.as_slice().binary_search(value) {
-            Ok(_) => todo!("根に対象値が記録されている"),
+            Ok(_) => None,
             Err(i) => {
                 let hit = match self.root.children.get(i) {
                     Some(child) => match child.keys.as_slice().binary_search(value) {
@@ -235,7 +230,6 @@ where
     }
 
     fn pivot_left(&mut self, index: usize) {
-        println!("pivot_left: {:?}, index: {:?}", self, index);
         let value = self
             .keys
             .get_mut(index)
@@ -309,6 +303,66 @@ where
         }
     }
 
+    pub fn delete_intermediate(&mut self, value: &T) -> Result<(), Box<dyn std::error::Error>> {
+        match self.find_key(value) {
+            Ok(i) => {
+                self.take_left_max(i);
+            },
+            Err(i) => match self.get_mut_child(i) {
+                None => return Err("削除対象のノードが存在しません".into()),
+                Some(node) => {
+                    match node.find_key(value) {
+                        Ok(i) => {
+                            self.take_left_max(i);
+                        },
+                        Err(_) => {
+                            node.delete_intermediate(value)?;
+                        }
+                    }
+                }
+            },
+        }
+
+        Ok(())
+    }
+
+    pub fn take_left_max(&mut self, index: usize) -> Option<T> {
+        if self.is_leaf() {
+            return Some(self.keys.remove(index));
+        }
+
+        let v = match self.children.get_mut(index) {
+            Some(left) => {
+                let last_index = left.keys.len() - 1;
+                left.take_left_max(last_index)
+                    .map(|max_value| {
+                        std::mem::replace(&mut self.keys[index], max_value)
+                    })
+            }
+            None => None,
+        };
+
+        match self.children.get_mut(index) {
+            Some(left) => {
+                // println!("!! {:?}, {:?}", left, index);
+                if left.keys.len() < D {
+                    self.pivot_left(index);
+                }
+            }
+            _ => {}
+        }
+
+        v
+    }
+
+    pub fn find_key(&mut self, value: &T) -> Result<usize, usize> {
+        self.keys.as_slice().binary_search(value)
+    }
+
+    pub fn get_mut_child(&mut self, index: usize) -> Option<&mut Node<T, D>> {
+        self.children.get_mut(index)
+    }
+
     fn is_full(&self) -> bool {
         self.keys.len() >= D * 2 - 1
     }
@@ -317,8 +371,13 @@ where
         self.children.is_empty()
     }
 
-    fn is_delete(&self) -> bool {
-        self.keys.len() >= D
+    fn is_delete_child(&self, index: usize) -> bool {
+        self.children
+            .get(index)
+            .expect("削除対象のキーを含むノードが取得できません")
+            .keys
+            .len()
+            >= D
     }
 
     fn delete_key(&mut self, value: &T) {
@@ -404,7 +463,7 @@ mod tests {
     }
 
     #[test]
-    fn test_delete_leaf_node() {
+    fn test_delete_leaf_node() -> Result<(), Box<dyn std::error::Error>> {
         let mut btree: BTree<i32, 2> = BTree::new();
         //        [3, 6, 8]
         // [1,2] | [5] | [7] | [9]
@@ -413,21 +472,45 @@ mod tests {
         }
 
         println!("{:#?}", btree);
-        btree.delete(&1);
+        btree.delete(&1)?;
         println!("{:#?}", btree);
         //        [3, 6, 8]
         // [2] | [5] | [7] | [9]
-        btree.delete(&2);
+        btree.delete(&2)?;
         println!("{:#?}", btree);
         //        [6, 8]
         // [3, 5] | [7] | [9]
-        btree.delete(&9);
+        btree.delete(&9)?;
         println!("{:#?}", btree);
-        btree.delete(&5);
+        btree.delete(&5)?;
         println!("{:#?}", btree);
-        btree.delete(&8);
+        btree.delete(&8)?;
         println!("{:#?}", btree);
-        btree.delete(&7);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_delete_intermediate_node() -> Result<(), Box<dyn std::error::Error>> {
+        let mut btree: BTree<i32, 2> = BTree::new();
+        //             [4]
+        //    [2]       |   [ 6,    8,   10 ]
+        // [1] | [3]      [5] | [7] | [9] | [11,12]
+
+        //             [2]
+        //    [1]       |  [  6,    8,   10  ]
+        // [ ] | [3]      [5] | [7] | [9] | [11,12]
+
+        // [2]
+        // [1, 3]
+
+        for i in 1..=12 {
+            btree.insert(i);
+        }
         println!("{:#?}", btree);
+        btree.delete(&2)?;
+        println!("{:#?}", btree);
+
+        Ok(())
     }
 }
